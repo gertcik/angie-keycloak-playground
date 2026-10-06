@@ -1,0 +1,87 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.2.0'
+    id 'io.spring.dependency-management' version '1.1.4'
+    id 'io.qameta.allure' version '2.11.2'
+}
+
+group = 'com.bank'
+version = '1.0.0'
+
+java {
+    sourceCompatibility = '21'
+    targetCompatibility = '21'
+}
+
+allure {
+    version = '2.34.0'
+    autoconfigure = false
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web:3.2.0'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa:3.2.0'
+    implementation 'org.springframework.boot:spring-boot-starter-validation:3.2.0'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator:3.2.0'
+    implementation 'com.h2database:h2:2.2.224'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test:3.2.0'
+    testImplementation 'org.mockito:mockito-core:5.8.0'
+    testImplementation 'io.qameta.allure:allure-junit5:2.34.0'
+}
+
+tasks.named('test') {
+    useJUnitPlatform {
+        excludeTags 'e2e'
+    }
+}
+
+// E2E-тесты аутентификации против живого стенда (Angie :82 + Keycloak :8081).
+// Отдельная задача: не входит в check/build и не требует поднятого Docker.
+tasks.register('e2eTest', Test) {
+    group = 'verification'
+    description = 'Интеграционные тесты (JWT и Basic -> JWT через Angie/Keycloak). Live-стенд обязан быть поднят.'
+    useJUnitPlatform {
+        includeTags 'e2e'
+    }
+    outputs.upToDateWhen { false }
+    systemProperty 'e2e.angie.base', System.getProperty('e2e.angie.base', 'http://localhost:82')
+    systemProperty 'e2e.keycloak.url', System.getProperty('e2e.keycloak.url', 'http://localhost:8081')
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat 'full'
+    }
+}
+
+// Allure CLI не умеет перезаписывать существующую папку отчёта без --clean:
+// удаляем её перед генерацией, чтобы повторные запуски не падали.
+tasks.named('allureReport') {
+    doFirst { delete layout.buildDirectory.dir('reports/allure-report') }
+}
+
+// Standalone-отчёт: ОДИН HTML-файл со вшитыми данными (Allure CLI --single-file).
+// Открывается прямо с диска двойным кликом — без HTTP-сервера и любых компонентов.
+tasks.register('allureStandalone') {
+    group = 'verification'
+    description = 'Генерирует standalone Allure-отчёт (build/reports/allure-report-standalone/index.html)'
+    outputs.upToDateWhen { false }
+    dependsOn 'downloadAllure'
+    doLast {
+        def out = layout.buildDirectory.dir('reports/allure-report-standalone').get().asFile
+        delete(out)
+        def cli = layout.buildDirectory.file('allure/commandline/bin/allure.bat').get().asFile
+        exec {
+            workingDir projectDir
+            commandLine cli, 'generate', 'build/allure-results', '--single-file', '-o', out
+        }
+        println "Standalone report: ${out}/index.html"
+    }
+}

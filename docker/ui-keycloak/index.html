@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bank API — вход через Keycloak</title>
+  <style>
+    :root { --primary: #2d7d46; --primary-dark: #1f5c33; --bg: #f4f6f8; --card: #fff; --muted: #6b7280; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: var(--bg); color: #222; }
+    .wrap { max-width: 860px; margin: 40px auto; padding: 0 16px; }
+    .card { background: var(--card); border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 24px; margin-bottom: 20px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    h2 { font-size: 17px; margin: 0 0 12px; color: var(--primary-dark); }
+    .sub { color: var(--muted); margin-bottom: 18px; }
+    .btn { display: inline-block; border: 0; border-radius: 6px; padding: 10px 18px; font-size: 15px;
+           cursor: pointer; background: var(--primary); color: #fff; text-decoration: none; }
+    .btn:hover { background: var(--primary-dark); }
+    .btn.ghost { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+    .btn.danger { background: #b91c1c; }
+    .btn.danger:hover { background: #7f1d1d; }
+    .row { display: flex; align-items: center; gap: 12px; }
+    .badge { display: inline-block; background: #e8f5ee; color: var(--primary-dark); border-radius: 20px;
+             padding: 3px 10px; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #e5e7eb; }
+    th { color: var(--muted); font-weight: 600; }
+    .err { color: #b91c1c; background: #fde8e8; border-radius: 6px; padding: 10px 14px; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 6px 14px; font-size: 14px; margin-bottom: 6px; }
+    .kv dt { color: var(--muted); margin: 0; } .kv dd { margin: 0; }
+    .mono { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Вход -->
+  <div id="login-view" class="card hidden">
+    <h1>Bank API</h1>
+    <div class="sub">Вход через Keycloak (домен <b>bank</b>, клиент <b>bank-web</b>)</div>
+    <button class="btn" id="login-btn">Войти через Keycloak</button>
+    <p class="sub" style="margin-top:14px">После нажатия вы перейдёте на страницу входа Keycloak, затем вернётесь сюда с JWT-токеном.</p>
+  </div>
+
+  <!-- Дашборд -->
+  <div id="dashboard-view" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1>Личный кабинет</h1>
+          <div class="sub" id="me-sub">…</div>
+        </div>
+        <div class="row">
+          <button class="btn ghost" id="refresh-btn">Обновить</button>
+          <button class="btn danger" id="logout-btn">Выйти</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Профиль клиента</h2>
+      <div id="client-box"><span class="sub">Загрузка…</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Счета</h2>
+      <div id="accounts-box"><span class="sub">Загрузка…</span></div>
+    </div>
+
+    <div class="card">
+      <h2>JWT</h2>
+      <div class="sub">Декодированный payload из access-токена (подпись в демо не проверяется):</div>
+      <pre class="mono" id="jwt-debug" style="background:#f8fafc;padding:10px;border-radius:6px;margin:0"></pre>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  'use strict';
+
+  var CONFIG = {
+    keycloakUrl: 'http://localhost:8081',
+    realm: 'bank',
+    clientId: 'bank-web',
+    redirectUri: window.location.origin + '/ui-keycloak/index.html',
+    apiBase: window.location.origin
+  };
+
+  var SS = {
+    accessToken: 'kc_access_token',
+    refreshToken: 'kc_refresh_token',
+    pkceState: 'kc_pkce_state',
+    pkceVerifier: 'kc_pkce_verifier'
+  };
+
+  // --- Base64url helpers ---
+  function b64urlFromBytes(bytes) {
+    var bin = '';
+    for (var i = 0; i < bytes.length; i++) { bin += String.fromCharCode(bytes[i]); }
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function b64urlFromString(str) { return b64urlFromBytes(new TextEncoder().encode(str)); }
+  function randomString(len) {
+    var arr = new Uint8Array(len);
+    crypto.getRandomValues(arr);
+    return b64urlFromBytes(arr);
+  }
+  function sha256B64url(verifier) {
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+      .then(function (digest) { return b64urlFromBytes(new Uint8Array(digest)); });
+  }
+  function decodeJwtPayload(token) {
+    try {
+      var parts = token.split('.');
+      var base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) { base64 += '='; }
+      var json = decodeURIComponent(escape(atob(base64)));
+      return JSON.stringify(JSON.parse(json), null, 2);
+    } catch (e) { return '(cannot decode: ' + e.message + ')'; }
+  }
+  function readParam(name) {
+    return new URLSearchParams(window.location.search).get(name);
+  }
+  function clearUrlCode() {
+    var url = window.location.origin + window.location.pathname;
+    window.history.replaceState({}, document.title, url);
+  }
+
+  // --- Keycloak flow ---
+  function tokenEndpoint() {
+    return CONFIG.keycloakUrl + '/realms/' + CONFIG.realm + '/protocol/openid-connect/token';
+  }
+  function authEndpoint() {
+    return CONFIG.keycloakUrl + '/realms/' + CONFIG.realm + '/protocol/openid-connect/auth';
+  }
+  function revokeEndpoint() {
+    return CONFIG.keycloakUrl + '/realms/' + CONFIG.realm + '/protocol/openid-connect/revoke';
+  }
+  function logoutEndpoint() {
+    return CONFIG.keycloakUrl + '/realms/' + CONFIG.realm + '/protocol/openid-connect/logout';
+  }
+  function logoutRedirectUrl() {
+    return logoutEndpoint() +
+      '?client_id=' + encodeURIComponent(CONFIG.clientId) +
+      '&post_logout_redirect_uri=' + encodeURIComponent(CONFIG.redirectUri);
+  }
+
+  function startLogin() {
+    var verifier = randomString(48);
+    var state = randomString(24);
+    sessionStorage.setItem(SS.pkceVerifier, verifier);
+    sessionStorage.setItem(SS.pkceState, state);
+    return sha256B64url(verifier).then(function (challenge) {
+      var params = [
+        'client_id=' + encodeURIComponent(CONFIG.clientId),
+        'redirect_uri=' + encodeURIComponent(CONFIG.redirectUri),
+        'response_type=code',
+        'scope=openid profile email',
+        'code_challenge=' + encodeURIComponent(challenge),
+        'code_challenge_method=S256',
+        'state=' + encodeURIComponent(state),
+        'nonce=' + encodeURIComponent(randomString(16))
+      ];
+      window.location.href = authEndpoint() + '?' + params.join('&');
+    });
+  }
+
+  function exchangeCode(code) {
+    return fetch(tokenEndpoint(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: CONFIG.redirectUri,
+        client_id: CONFIG.clientId,
+        code_verifier: sessionStorage.getItem(SS.pkceVerifier)
+      })
+    }).then(function (res) {
+      if (!res.ok) { throw new Error('Token exchange failed: HTTP ' + res.status); }
+      return res.json();
+    }).then(function (data) {
+      sessionStorage.setItem(SS.accessToken, data.access_token);
+      sessionStorage.setItem(SS.refreshToken, data.refresh_token || '');
+      sessionStorage.removeItem(SS.pkceVerifier);
+      sessionStorage.removeItem(SS.pkceState);
+    });
+  }
+
+  function refreshToken() {
+    var refresh = sessionStorage.getItem(SS.refreshToken);
+    if (!refresh) { return Promise.reject(new Error('No refresh token')); }
+    return fetch(tokenEndpoint(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refresh,
+        client_id: CONFIG.clientId
+      })
+    }).then(function (res) {
+      if (!res.ok) { throw new Error('Refresh failed: HTTP ' + res.status); }
+      return res.json();
+    }).then(function (data) {
+      sessionStorage.setItem(SS.accessToken, data.access_token);
+      sessionStorage.setItem(SS.refreshToken, data.refresh_token || refresh);
+    });
+  }
+
+  function api(path) {
+    var token = sessionStorage.getItem(SS.accessToken);
+    return fetch(CONFIG.apiBase + '/api' + path, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    }).then(function (res) {
+      if (res.status === 401) {
+        return refreshToken().then(function () {
+          return fetch(CONFIG.apiBase + '/api' + path, {
+            headers: { 'Authorization': 'Bearer ' + sessionStorage.getItem(SS.accessToken) }
+          });
+        });
+      }
+      return res;
+    }).then(function (res) {
+      if (!res.ok) { throw new Error('API ' + path + ' failed: HTTP ' + res.status); }
+      return res.json();
+    });
+  }
+
+  function logout() {
+    var refresh = sessionStorage.getItem(SS.refreshToken);
+    var access = sessionStorage.getItem(SS.accessToken);
+    sessionStorage.removeItem(SS.accessToken);
+    sessionStorage.removeItem(SS.refreshToken);
+    sessionStorage.removeItem(SS.pkceState);
+    sessionStorage.removeItem(SS.pkceVerifier);
+    showLogin();
+    if (!refresh && !access) { return; }
+    // 1) Отзываем refresh-токен (RFC 7009) — заодно деактивирует связанный access-токен
+    var body = new URLSearchParams({
+      client_id: CONFIG.clientId,
+      token: refresh || access,
+      token_type_hint: refresh ? 'refresh_token' : 'access_token'
+    });
+    fetch(revokeEndpoint(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
+    }).catch(function () {}).then(function () {
+      // 2) Завершаем SSO-сессию в Keycloak и возвращаемся на страницу входа
+      window.location.href = logoutRedirectUrl();
+    });
+  }
+
+  // --- Rendering ---
+  function showLogin() {
+    document.getElementById('login-view').classList.remove('hidden');
+    document.getElementById('dashboard-view').classList.add('hidden');
+  }
+  function showDashboard(me, client) {
+    document.getElementById('login-view').classList.add('hidden');
+    document.getElementById('dashboard-view').classList.remove('hidden');
+    document.getElementById('me-sub').innerHTML = 'Вы вошли как <b>' + escapeHtml(me.username) + '</b> <span class="badge">clientId=' + me.clientId + '</span>';
+    document.getElementById('jwt-debug').textContent = decodeJwtPayload(sessionStorage.getItem(SS.accessToken));
+
+    if (client) {
+      document.getElementById('client-box').innerHTML =
+        '<dl class="kv">' +
+        '  <dt>Имя</dt><dd>' + escapeHtml(client.firstName + ' ' + client.middleName + ' ' + client.lastName) + '</dd>' +
+        '  <dt>Телефон</dt><dd>' + escapeHtml(client.phone) + '</dd>' +
+        '  <dt>Email</dt><dd>' + escapeHtml(client.email) + '</dd>' +
+        '</dl>';
+    } else {
+      document.getElementById('client-box').innerHTML = '<span class="sub">Профиль не найден.</span>';
+    }
+  }
+  function renderAccounts(accounts) {
+    if (!accounts || accounts.length === 0) {
+      document.getElementById('accounts-box').innerHTML = '<span class="sub">Счетов нет.</span>';
+      return;
+    }
+    var rows = accounts.map(function (a) {
+      return '<tr><td>' + escapeHtml(a.id) + '</td><td>' + escapeHtml(a.accountNumber) + '</td>' +
+        '<td>' + escapeHtml(a.accountType) + '</td><td>' + escapeHtml(a.balance) + ' ' + escapeHtml(a.currency) + '</td>' +
+        '<td>' + escapeHtml(String(a.createdAt).slice(0, 19).replace('T', ' ')) + '</td></tr>';
+    }).join('');
+    document.getElementById('accounts-box').innerHTML =
+      '<table><thead><tr><th>ID</th><th>Номер</th><th>Тип</th><th>Баланс</th><th>Открыт</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+  function showError(msg) {
+    var box = document.getElementById('client-box');
+    document.getElementById('dashboard-view').classList.remove('hidden');
+    box.innerHTML = '<div class="err">' + escapeHtml(msg) + '</div>';
+  }
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  // --- Load data ---
+  function loadDashboard() {
+    document.getElementById('client-box').innerHTML = '<span class="sub">Загрузка…</span>';
+    document.getElementById('accounts-box').innerHTML = '<span class="sub">Загрузка…</span>';
+    return api('/me').then(function (me) {
+      return Promise.all([
+        Promise.resolve(me),
+        me.clientId ? api('/client/' + me.clientId).catch(function () { return null; }) : Promise.resolve(null),
+        me.clientId ? api('/client/' + me.clientId + '/accounts').catch(function () { return []; }) : Promise.resolve([])
+      ]);
+    }).then(function (res) {
+      showDashboard(res[0], res[1]);
+      renderAccounts(res[2]);
+    }).catch(function (err) {
+      if (err.message && err.message.indexOf('Refresh failed') !== -1) {
+        logout();
+      } else {
+        showError('Не удалось загрузить данные: ' + err.message);
+      }
+    });
+  }
+
+  // --- Init ---
+  document.getElementById('login-btn').addEventListener('click', function () { startLogin(); });
+  document.getElementById('refresh-btn').addEventListener('click', loadDashboard);
+  document.getElementById('logout-btn').addEventListener('click', logout);
+
+  var code = readParam('code');
+  var state = readParam('state');
+  if (code && state && state === sessionStorage.getItem(SS.pkceState)) {
+    clearUrlCode();
+    exchangeCode(code).then(loadDashboard).catch(function (err) { showLogin(); });
+  } else if (sessionStorage.getItem(SS.accessToken)) {
+    loadDashboard();
+  } else {
+    showLogin();
+  }
+</script>
+</body>
+</html>

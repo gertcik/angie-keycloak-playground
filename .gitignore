@@ -1,0 +1,50 @@
+*.cmd
+*.png
+task.txt
+gradle-8.5/
+
+# Gradle
+build/
+.gradle/
+#gradle/
+#gradlew
+#gradlew.bat
+
+# JDK
+jdk-21.0.2/
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker/prometheus/data/
+docker/grafana/data/
+docker/grafana/dashboards/
+*.log
+
+# Environment
+.env
+*.env.local
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+
+# Prometheus WAL
+docker/prometheus/data/wal/
+docker/prometheus/data/chunks_head/
+
+# JAR files
+build/libs/*.jar

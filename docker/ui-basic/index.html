@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bank API — базовый вход (Basic / JWT через Angie)</title>
+  <style>
+    :root { --primary: #2d7d46; --primary-dark: #1f5c33; --bg: #f4f6f8; --card: #fff; --muted: #6b7280; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: var(--bg); color: #222; }
+    .wrap { max-width: 860px; margin: 40px auto; padding: 0 16px; }
+    .card { background: var(--card); border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 24px; margin-bottom: 20px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    h2 { font-size: 17px; margin: 0 0 12px; color: var(--primary-dark); }
+    .sub { color: var(--muted); margin-bottom: 18px; }
+    .btn { display: inline-block; border: 0; border-radius: 6px; padding: 10px 18px; font-size: 15px;
+           cursor: pointer; background: var(--primary); color: #fff; text-decoration: none; }
+    .btn:hover { background: var(--primary-dark); }
+    .btn.ghost { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+    .btn.danger { background: #b91c1c; }
+    .btn.danger:hover { background: #7f1d1d; }
+    .row { display: flex; align-items: center; gap: 12px; }
+    .badge { display: inline-block; background: #e8f5ee; color: var(--primary-dark); border-radius: 20px;
+             padding: 3px 10px; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #e5e7eb; }
+    th { color: var(--muted); font-weight: 600; }
+    .err { color: #b91c1c; background: #fde8e8; border-radius: 6px; padding: 10px 14px; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 6px 14px; font-size: 14px; margin-bottom: 6px; }
+    .kv dt { color: var(--muted); margin: 0; } .kv dd { margin: 0; }
+    .mono { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+    .hidden { display: none; }
+    form { margin-top: 4px; }
+    label { display: block; font-size: 14px; color: var(--muted); margin: 12px 0 4px; }
+    input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 15px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Вход -->
+  <div id="login-view" class="card hidden">
+    <h1>Bank API</h1>
+    <div class="sub">Базовый вход без Keycloak: логин и пароль уходят как <b>Basic</b> на Angie, который сам получает и кэширует JWT.</div>
+    <form id="login-form">
+      <label for="login-user">Логин (ivanov / petrova)</label>
+      <input id="login-user" autocomplete="username" placeholder="ivanov">
+      <label for="login-pass">Пароль</label>
+      <input id="login-pass" type="password" autocomplete="current-password" placeholder="password123">
+      <div style="margin-top:18px"><button type="submit" class="btn">Войти</button></div>
+    </form>
+    <div id="login-err" class="err hidden" style="margin-top:14px"></div>
+  </div>
+
+  <!-- Дашборд -->
+  <div id="dashboard-view" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1>Личный кабинет</h1>
+          <div class="sub" id="me-sub">…</div>
+        </div>
+        <div class="row">
+          <button class="btn ghost" id="refresh-btn">Обновить</button>
+          <button class="btn danger" id="logout-btn">Выйти</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Профиль клиента</h2>
+      <div id="client-box"><span class="sub">Загрузка…</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Счета</h2>
+      <div id="accounts-box"><span class="sub">Загрузка…</span></div>
+    </div>
+  </div>
+
+  <div class="sub">JWT хранится в памяти Angie (shared-словарь) до истечения срока токена; «Выйти» лишь очищает сохранённые учётные данные в этом браузере.</div>
+
+</div>
+
+<script>
+  'use strict';
+
+  var CONFIG = { apiBase: window.location.origin };
+  var SS = { basic: 'ui_basic_creds' };
+
+  function decodeJwtPayload(token) {
+    try {
+      var parts = token.split('.');
+      var base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) { base64 += '='; }
+      var json = decodeURIComponent(escape(atob(base64)));
+      return JSON.stringify(JSON.parse(json), null, 2);
+    } catch (e) { return '(cannot decode: ' + e.message + ')'; }
+  }
+
+  function basicHeader() {
+    return 'Basic ' + sessionStorage.getItem(SS.basic);
+  }
+
+  function api(path) {
+    return fetch(CONFIG.apiBase + '/api' + path, {
+      headers: { 'Authorization': basicHeader() }
+    }).then(function (res) {
+      if (res.status === 401) { throw new ApiError('Неверный логин/пароль (HTTP 401)', 401); }
+      if (!res.ok) { throw new ApiError('API ' + path + ' failed: HTTP ' + res.status, res.status); }
+      return res.json();
+    });
+  }
+
+  function ApiError(message, status) {
+    this.message = message;
+    this.status = status;
+  }
+
+  function showLogin(errMsg) {
+    document.getElementById('login-view').classList.remove('hidden');
+    document.getElementById('dashboard-view').classList.add('hidden');
+    var box = document.getElementById('login-err');
+    if (errMsg) {
+      box.textContent = errMsg;
+      box.classList.remove('hidden');
+    } else {
+      box.classList.add('hidden');
+    }
+  }
+
+  function showDashboard(me, client) {
+    document.getElementById('login-view').classList.add('hidden');
+    document.getElementById('dashboard-view').classList.remove('hidden');
+    document.getElementById('me-sub').innerHTML = 'Вы вошли как <b>' + escapeHtml(me.username) + '</b> <span class="badge">clientId=' + me.clientId + '</span>';
+
+    if (client) {
+      document.getElementById('client-box').innerHTML =
+        '<dl class="kv">' +
+        '  <dt>Имя</dt><dd>' + escapeHtml(client.firstName + ' ' + client.middleName + ' ' + client.lastName) + '</dd>' +
+        '  <dt>Телефон</dt><dd>' + escapeHtml(client.phone) + '</dd>' +
+        '  <dt>Email</dt><dd>' + escapeHtml(client.email) + '</dd>' +
+        '</dl>';
+    } else {
+      document.getElementById('client-box').innerHTML = '<span class="sub">Профиль не найден.</span>';
+    }
+  }
+
+  function renderAccounts(accounts) {
+    if (!accounts || accounts.length === 0) {
+      document.getElementById('accounts-box').innerHTML = '<span class="sub">Счетов нет.</span>';
+      return;
+    }
+    var rows = accounts.map(function (a) {
+      return '<tr><td>' + escapeHtml(a.id) + '</td><td>' + escapeHtml(a.accountNumber) + '</td>' +
+        '<td>' + escapeHtml(a.accountType) + '</td><td>' + escapeHtml(a.balance) + ' ' + escapeHtml(a.currency) + '</td>' +
+        '<td>' + escapeHtml(String(a.createdAt).slice(0, 19).replace('T', ' ')) + '</td></tr>';
+    }).join('');
+    document.getElementById('accounts-box').innerHTML =
+      '<table><thead><tr><th>ID</th><th>Номер</th><th>Тип</th><th>Баланс</th><th>Открыт</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  function showError(msg) {
+    var box = document.getElementById('client-box');
+    document.getElementById('dashboard-view').classList.remove('hidden');
+    box.innerHTML = '<div class="err">' + escapeHtml(msg) + '</div>';
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  function loadDashboard() {
+    var clientBox = document.getElementById('client-box');
+    clientBox.innerHTML = '<span class="sub">Загрузка…</span>';
+    var tokenInfo = document.getElementById('token-debug');
+    if (tokenInfo) { tokenInfo.textContent = ''; }
+    return api('/me').then(function (me) {
+      return Promise.all([
+        Promise.resolve(me),
+        me.clientId ? api('/client/' + me.clientId).catch(function () { return null; }) : Promise.resolve(null),
+        me.clientId ? api('/client/' + me.clientId + '/accounts').catch(function () { return []; }) : Promise.resolve([])
+      ]);
+    }).then(function (res) {
+      showDashboard(res[0], res[1]);
+      renderAccounts(res[2]);
+    }).catch(function (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        sessionStorage.removeItem(SS.basic);
+        showLogin('Не удалось войти: неверный логин или пароль.');
+      } else {
+        showError('Не удалось загрузить данные: ' + err.message);
+      }
+    });
+  }
+
+  function login(user, pass) {
+    sessionStorage.setItem(SS.basic, btoa(user + ':' + pass));
+    return loadDashboard().then(function () {
+      var box = document.getElementById('login-err');
+      var dash = document.getElementById('dashboard-view');
+      if (!dash.classList.contains('hidden')) {
+        box.classList.add('hidden');
+      }
+    }, function (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        sessionStorage.removeItem(SS.basic);
+        showLogin('Неверный логин или пароль.');
+        return;
+      }
+      showLogin('Ошибка входа: ' + err.message);
+    });
+  }
+
+  function logout() {
+    sessionStorage.removeItem(SS.basic);
+    showLogin();
+  }
+
+  document.getElementById('login-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var user = document.getElementById('login-user').value.trim();
+    var pass = document.getElementById('login-pass').value;
+    if (!user || !pass) {
+      var box = document.getElementById('login-err');
+      box.textContent = 'Введите логин и пароль.';
+      box.classList.remove('hidden');
+      return;
+    }
+    login(user, pass);
+  });
+  document.getElementById('refresh-btn').addEventListener('click', loadDashboard);
+  document.getElementById('logout-btn').addEventListener('click', logout);
+
+  if (sessionStorage.getItem(SS.basic)) {
+    loadDashboard();
+  } else {
+    showLogin();
+  }
+</script>
+</body>
+</html>

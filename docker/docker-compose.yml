@@ -1,0 +1,94 @@
+services:
+  bank-app:
+    build:
+      context: ..
+      dockerfile: docker/app/Dockerfile
+    image: bank-api:1.0.0
+    container_name: bank-app
+    expose:
+      - "8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:h2:mem:testdb
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create-drop
+    networks:
+      - bank-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  angie-proxy:
+    build:
+      context: ./angie
+      dockerfile: Dockerfile
+    image: angie-proxy:1.0
+    container_name: angie-proxy
+    ports:
+      - "82:82"
+    volumes:
+      - ./angie/angie.conf:/etc/angie/angie.conf:ro
+      - ./angie/conf.d:/etc/angie/conf.d:ro
+      - ./angie/js:/etc/angie/js:ro
+      - ./angie/html/console.html:/usr/share/angie/html/console.html:ro
+      - ./links.html:/usr/share/angie/html/index.html:ro
+      - ./ui-keycloak:/usr/share/angie/html/ui-keycloak:ro
+      - ./ui-basic:/usr/share/angie/html/ui-basic:ro
+    depends_on:
+      bank-app:
+        condition: service_healthy
+    networks:
+      - bank-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:82/angie_status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    container_name: keycloak
+    command: start-dev --import-realm
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./keycloak/bank-realm.json:/opt/keycloak/data/import/bank-realm.json:ro
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      - KC_HEALTH_ENABLED=true
+    networks:
+      - bank-network
+    restart: unless-stopped
+
+  k6-load-test:
+    build:
+      context: ./k6
+      dockerfile: Dockerfile
+    container_name: k6-load-test
+    environment:
+      - BASE_URL=http://angie-proxy:82
+      - KC_URL=http://keycloak:8080
+      - KC_REALM=bank
+      - KC_CLIENT=bank-web
+      - KC_USER=testuser
+      - KC_PASS=testpass123
+    depends_on:
+      angie-proxy:
+        condition: service_healthy
+      bank-app:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    networks:
+      - bank-network
+    profiles:
+      - test
+
+networks:
+  bank-network:
+    driver: bridge

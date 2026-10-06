@@ -1,0 +1,7 @@
+.git
+.gradle
+app/build
+!app/build/libs/*.jar
+*.md
+docker
+start_all.cmd
