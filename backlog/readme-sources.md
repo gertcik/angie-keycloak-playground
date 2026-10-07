@@ -1,29 +1,42 @@
 # README: добавить ссылку на статью и другие материалы в раздел «Источники»
 
-**Статус:** backlog (не выполнено)
+**Статус:** ✅ ВЫПОЛНЕНО (2026-10-07)
 
-## Задача
-1. Добавить в список источников в `README.md` статью:
-   - https://fastfox.pro/blog/tutorials/nginx-njs-jwt-rs256-hs256/
-   (тема: JWT RS256/HS256 через njs в NGINX — прямо относится к нашей связке Angie/njs jwt.js)
-2. Заодно дополнить раздел остальными ссылками на материалы (nginx, njs, Keycloak, JWT, OIDC и т.п.)
+## Статья (проверена 2026-10-07)
+- URL: https://fastfox.pro/blog/tutorials/nginx-njs-jwt-rs256-hs256/
+- Заголовок: «JWT в Nginx с njs: проверка HS256 и RS256 на реверс-прокси»
+- Автор: AI (GPT-5), дата: 10 ноя 2025, релевантность: прямая — та же схема, что у нас:
+  - `auth_request /_auth` + `js_content jwt.auth` (у нас `/_jwt` + `jwt.handle`),
+  - `js_import`, загрузка динамического модуля njs (у нас `load_module ngx_http_js_module.so`),
+  - проброс клеймов в апстрим, `auth_request_set` (у нас `proxy_set_header Authorization $auth_token`),
+  - чек `exp` (у нас `expires()` в `jwt.js`), `iss`/`aud`,
+  - WebCrypto → `crypto.subtle`; статья упоминает `ngx.fetch`/JWKS (у нас подпись НЕ проверяется — демо; статья — справочник как это сделать «по-взрослому»).
 
-## Текущее состояние раздела «Источники»
-- Найден поиском в README.md: отдельного раздела «Источники/Ссылки/Материалы» СЕЙЧАС НЕТ
-- Есть в конце README пункт про `AGENTS.md` (строка ~429) — это про структуру репо, не список ссылок
-- Надо решить: создать новый раздел «Материалы/Источники» или дополнить существующий (уточнить у владельца репо / посмотреть конец README)
+## Что добавить в README.md
+Новый раздел в конце (после «Документация», строка ~429):
 
-## Как проверить статью перед добавлением
-- Открыть https://fastfox.pro/blog/tutorials/nginx-njs-jwt-rs256-hs256/ и вынести: заголовок, основную мысль (RS256/HS256, где njs на стороне NGINX), какие функции njs используются (crypto.subtle, base64url, decode JWT payload) — и на что из нашего кода (jwt.js: `expires()`, `hash()`, Buffer-base64) это похоже
-- Проверить релевантность (наш стенд НЕ проверяет подпись JWT; статья как справочник по подписи/декоду в njs)
+```markdown
+## Материалы / Источники
 
-## Также рассмотреть кандидатов в «остальные ссылки»
-- Документация njs (nginx.org/njs, ngx.var, shared_dict zone)
-- Документация Angie (angie.software), включая `angie_status`, `/status/`
-- Keycloak: password grant / PKCE / импорт realm
-- JWT spec (RFC 7519), OIDC discovery
-- Spring Boot Security / @WebMvcTest документация
-- Статья по `auth_request` в NGINX (nginx.org / Абсолютные ссылки to auth_request)
+- [JWT в Nginx с njs: проверка HS256 и RS256 на реверс-прокси](https://fastfox.pro/blog/tutorials/nginx-njs-jwt-rs256-hs256/)
+  — та же схема, что в стенде (`auth_request` + `js_content`), но с проверкой подписи (HS256/RS256,
+  WebCrypto, JWKS) — справочник, как усилить наш `docker/angie/js/jwt.js` за пределы демо.
+- [Документация njs](https://nginx.org/en/docs/njs/) — язык, `ngx.shared`, `js_content`/`js_set`.
+- [ngx_http_auth_request_module](https://nginx.org/en/docs/http/ngx_http_auth_request_module.html)
+  — `auth_request`/`auth_request_set` (у нас `/_jwt` в `default.conf`).
+- [Angie — официальный сайт/документация](https://angie.software/en/) — конфиг, `/status/`.
+- [Keycloak: Authorization Code + PKCE](https://www.keycloak.org/docs/latest/authorization_services/)
+  и [Direct Access Grants](https://www.keycloak.org/docs/latest/securing_apps/) — флоу `/ui-keycloak/` и `/_kc`.
+- [RFC 7519 (JWT)](https://www.rfc-editor.org/rfc/rfc7519) — структура токена, `exp`, `sub`, `aud`.
+- [OIDC Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html) — `/.well-known/openid-configuration`.
+- [Spring Boot: slice-тесты (@WebMvcTest)](https://docs.spring.io/spring-boot/reference/testing/spring-boot-applications.html#testing.spring-boot-applications.autoconfigured-tests)
+  — как написаны `BankControllerTest`/`ClientServiceImplTest`.
+```
+
+## Доп. ссылки-кандидаты (по желанию)
+- njs `js_shared_dict_zone` / `set` с TTL (зоной) — есть в доке njs на nginx.org (раздел shared dict).
+- Spring Security / JWT — у нас в приложении подпись не проверяется, можно сослаться на intro.
 
 ## Ожидаемый результат
-- Новый (или дополненный) раздел в README.md «Материалы/Источники» со ссылками + кратким пояснением, зачем каждая релевантна стенду
+- Раздел «Материалы / Источники» в `README.md` с перечисленными ссылками и пояснением релевантности.
+- НЕ выдумывать URL: все ссылки выше — официальные (nginx.org / angie.software / keycloak.org / rfc-editor.org / openid.net / docs.spring.io / fastfox.pro).

@@ -1,27 +1,49 @@
 # Кастомная страница входа вместо страницы Keycloak
 
-**Статус:** backlog (не выполнено)
+**Статус:** ✅ ВЫПОЛНЕНО (2026-10-07, вариант A — тема логина Keycloak)
 
-## Задача
-Сделать пользовательскую страницу входа (hosted на Angie), чтобы пользователь не видел стандартную страницу Keycloak.
+## Что сделано
+- Тема `docker/keycloak/themes/bank/login/`:
+  - `theme.properties` — `parent=keycloak`, `locales=ru,en`;
+  - `template.ftl` — брендовый каркас: шапка «Bank API» + подзаголовок, остальные секции (`header`, `form`, `socialProviders`, `info`, сообщения) наследуются из `base/login.ftl` родителей;
+  - `resources/css/bank.css` — зелёная тема поверх PatternFly/Keycloak (фон `#f4f6f8`, карточка скруглённая с тенью, кнопки/фокусы в фирменном `#2d7d46`).
+- `docker/keycloak/bank-realm.json` — `"loginTheme": "bank"`.
+- `docker/docker-compose.yml` — volume `./keycloak/themes:/opt/keycloak/themes:ro`.
+- Keycloak пересоздан (`up -d --force-recreate keycloak`).
 
-## Контекст стенда
-- `/ui-basic/` (`docker/ui-basic/index.html`): vanilla JS, Basic login/password → Angie/njs конвертирует в JWT (кэш `jwt_cache`). Уже «без редиректа на Keycloak».
-- `/ui-keycloak/` (`docker/ui-keycloak/index.html`): vanilla JS + PKCE S256 → редиректит на Keycloak `/realms/bank/protocol/openid-connect/auth`, где показывается фирменная страница входа Keycloak.
-- Realm `bank`, клиент `bank-web` (`standardFlowEnabled: true`, password grant) — `docker/keycloak/bank-realm.json`.
+## Проверка
+- Login-страница (PKCE `auth` endpoint + валидный code_challenge): HTTP 200, баннер `Bank API`, `css/bank.css` подключён, форма `username`/`password`/`kc-login` на месте, ошибок FreeMarker нет, логотип Keycloak не выводится.
+- E2E 6/6 PASSED (тесты ходят в token endpoint, не в страницу — не затронуты).
+- Остальные задачи (кроме неактуального Варианта B) закрыты.
 
-## Что нужно проработать (варианты)
-1. **Keycloak реализует темление темы (`themes`)**: Кастомизировать не применяя код — чистый UI. Для этого опции `--spi-theme-login-theme=custom` + mount кастомной темы в `${KC_HOME}/themes/...` в `docker/keycloak/`. Реализуется без изменения Spring.
-   - Наша тема single-file: кастомизировать форму логина Keycloak легче всего через Keycloak-темы (FreeMarker/Velocity).
-2. Заменить PKCE-флоу настройкой `login_theme` через Keycloak.
-3. Либо уйти от стандартной страницы без исправления Keycloak: собрать свою форму входа на Angie, которая ведёт на password grant + сохранить токен в localStorage и затем `/ui-keycloak/` (без redirect). Это фактически дублирует `/ui-basic/` — надо решить, не противоречит ли задача цели стенда (демонстрация OIDC/PKCE через стандартную страницу Keycloak).
+## Анализ (открытые вопросы закрыты частично)
 
-## Открытые вопросы
-- Страница должна заменить логин И PKCE, или только быть просто формой с паролем?
-- Нужно ли сохранить учебный смысл (демонстрация потока OIDC с редиректом)?
-- Какие стили/логотипы у «кастомной» страницы?
+### Вариант A — Тема логина Keycloak (рекомендуется)
+Стандартная тема логина Keycloak переопределяется через SPI `--spi-theme-login-theme=...`.
+Для Keycloak 26 (docker `quay.io/keycloak/keycloak:26.1`) themes живут в `/opt/keycloak/themes` (в 26 каталог стандартный: `{KC_HOME}/themes`; volume поднять туда).
 
-## Ожидаемый результат
-- Хостед-страница входа вместо стандартной Keycloak (в `docker/`, mounted в Angie или как theme в Keycloak)
-- Документация (README) обновлена про новый поток
-- E2E/smoke не должны сломаться (или обновлены под новый флоу)
+Шаги:
+1. Создать `docker/keycloak/themes/bank/login/` (минимальная тема: `theme.properties`, `<realm name>="bank"`, родитель `base`; переопределить `template/login.ftl` — переписать фирменную страницу; можно взять `template.ftl` из keycloak:26 и оставить только форму).
+2. В `docker/docker-compose.yml` сервису `keycloak`:
+   - volume: `./keycloak/themes:/opt/keycloak/themes:ro`,
+   - command: `start-dev --import-realm --spi-theme-login-theme=bank --spi-theme-admin-console-theme=keycloak` (логин-тему меняем, админ-тему не трогаем).
+3. В `bank-realm.json` можно задать `"loginTheme": "bank"` на уровне realm (более явно, чем SPI).
+4. `docker compose up -d --force-recreate keycloak` — контейнер пересоздать (realm импортируется заново).
+
+Плюсы: сохраняется весь OIDC-флоу (`/ui-keycloak/` PKCE продолжает работать), меняется только внешний вид страницы входа. E2E не ломается (тесты ходят через `/realms/bank/protocol/openid-connect/token`, не через страницу). Минусы: работа с FreeMarker-шаблоном Keycloak.
+
+### Вариант B — Своя форма на Angie (password grant, без редиректа на Keycloak)
+По сути это уже есть в `/ui-basic/`. Если нужна одна «красивая» страница входа, достаточно доработать `docker/ui-basic/index.html`:
+- инпут логина/пароля, кнопка «Войти»,
+- `fetch(apiBase + '/api/me', { headers: { 'Authorization': 'Basic ' + btoa(login+':'+pass) } })` → Angie/njs сам делает password grant (кэш `jwt_cache`),
+- при 200 сохранить ничего не надо (Angie кэширует по своему), перейти в дашборд, который уже есть в `/ui-keycloak/`? — нет, это ОТДЕЛЬНАЯ страница.
+- проще: вынести общую дашбордовую часть (список счетов и т.д.) в общий JS или оставить как есть в `/ui-basic/`.
+
+Плюсы: полный контроль вёрстки (HTML/CSS/JS, как уже в `ui-basic`), ноль работы с Keycloak-темами. Минусы: ломается демонстрационный смысл `/ui-keycloak/` (PKCE-редирект на Keycloak больше не показывается) — надо решить, оставляем ли этот флоу как отдельную демку.
+
+### Вариант C — Hybrid: `/ui-keycloak/` остаётся, но точка входа `/` показывает «красивую» форму
+- ссылка на `/ui-basic/` (Basic) и `/ui-keycloak/` (PKCE) уже есть в `docker/links.html` (страница `/`).
+
+## Решение (принято владельцем)
+Выбран **Вариант A** — тема логина Keycloak: PKCE-флоу `/ui-keycloak/` сохранён, изменился только внешний вид страницы входа (бренд «Bank API» поверх нативной формы).
+Вариант B (своя форма на Angie) — не требуется: `/ui-basic/` уже даёт логин без редиректа на Keycloak.

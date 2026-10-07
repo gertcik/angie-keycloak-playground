@@ -72,7 +72,7 @@ Basic → JWT в Angie (njs): `location /api/` использует `auth_reques
 
 All balancers proxy the same API: `GET /api/me` (из JWT), `GET /api/client/{id}`, `GET /api/account/{id}`, `GET /api/client/{id}/accounts`. Swagger UI: `http://localhost:82/swagger-ui.html`. Links page: `docker/links.html` mounted into angie at `/` as `index.html`. Web UI: `docker/ui-keycloak/index.html` (vanilla JS, PKCE S256) mounted into angie at `/ui-keycloak/`; `docker/ui-basic/index.html` (no Keycloak redirect, Basic → JWT) mounted at `/ui-basic/`.
 
-Keycloak config is `docker/keycloak/bank-realm.json` (realm import; no data volume — realm пересоздаётся при рестарте). Admin console: `http://localhost:8081` (`admin`/`admin`). Keycloak поднимается дольше остальных и без healthcheck — `start_all.cmd` сам ждёт `/.well-known/openid-configuration` перед smoke-тестами, k6 ретраит token fetch в `setup()`.
+Keycloak config is `docker/keycloak/bank-realm.json` (realm import; no data volume — realm пересоздаётся при рестарте; `loginTheme: "bank"`). Login theme lives in `docker/keycloak/themes/bank/login/` (`template.ftl` overrides the `keycloak` parent layout with the «Bank API» brandbar, `resources/css/bank.css` restyles PatternFly green; mounted into `/opt/keycloak/themes:ro`). Admin console: `http://localhost:8081` (`admin`/`admin`). Keycloak поднимается дольше остальных и без healthcheck — `start_all.cmd` сам ждёт `/.well-known/openid-configuration` перед smoke-тестами, k6 ретраит token fetch в `setup()`.
 
 ## Codebase gotchas
 

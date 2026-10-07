@@ -56,6 +56,7 @@ services:
       - "8081:8080"
     volumes:
       - ./keycloak/bank-realm.json:/opt/keycloak/data/import/bank-realm.json:ro
+      - ./keycloak/themes:/opt/keycloak/themes:ro
     environment:
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin

@@ -10,6 +10,7 @@
 | **API через Angie** | `http://localhost:82/api/...` | `/api/me`, `/api/client/{id}`, `/api/account/{id}`, `/api/client/{id}/accounts` — авторизация `Bearer` либо `Basic`; наружу `8080` не публикуется |
 | Web UI (Keycloak) | `http://localhost:82/ui-keycloak/` | vanilla JS, PKCE S256, вход через Keycloak (realm `bank`) |
 | Web UI (Basic) | `http://localhost:82/ui-basic/` | логин/пароль → `Basic` на Angie → JWT через njs (без редиректа на Keycloak) |
+| Login Keycloak | `http://localhost:8081/realms/bank/login` | кастомная тема `bank` (баннер «Bank API» поверх нативной формы) |
 | Swagger UI | `http://localhost:82/swagger-ui.html` | документация API через Angie |
 | Admin Keycloak | `http://localhost:8081` | консоль админа: `admin`/`admin`; realm `bank`, клиент `bank-web` |
 | Статус Angie | `http://localhost:82/angie_status` | stub_status (сессии/статистика) |
@@ -58,7 +59,7 @@ docker compose up -d --build
 |-----------|------|---------|
 | bank-app | 8080 (внутр.) | Spring Boot API — `/api/**` требует авторизацию, подпись JWT не проверяется. **Порт наружу не публикуется: доступ к API только через Angie `:82`** |
 | angie-proxy | 82 | балансировщик + Web UI + статусы (`/angie_status`, `/status/`) + links page `/` |
-| keycloak | 8081 | OIDC IdP, realm `bank`, клиент `bank-web` (PKCE + password grant, `start-dev --import-realm`, без volume — realm пересоздаётся при рестарте) |
+| keycloak | 8081 | OIDC IdP, realm `bank`, клиент `bank-web` (PKCE + password grant, `start-dev --import-realm`, без volume — realm пересоздаётся при рестарте); кастомная login-тема `bank` (`docker/keycloak/themes/bank/`) |
 | k6-load-test | — | нагрузочный тест (профиль `test`) |
 
 ## API и авторизация
@@ -265,10 +266,10 @@ http://localhost:82/status/        # JSON API (server_zones, upstreams, connecti
 │balancer + njs (ngx_http_js_module)                       │
 │API /api/** → ТОЛЬКО здесь (порт 8080 закрыт)             │
 │location /api/  →  auth_request /_jwt (js jwt.handle)     │
-│jwt_cache: njs shared dict (token|hash, zone TTL 270s)      │
+│jwt_cache: njs shared dict (token|hash, zone TTL 270s)    │
 │/_kc  →  password grant в Keycloak (только промах)        │
 │статика: /ui-keycloak/, /ui-basic/, /, /swagger-ui        │
-│статусы: /angie_status, /status/ (JSON)                    │
+│статусы: /angie_status, /status/ (JSON)                   │
 └───────────────────────────────┬──────────────────────────┘
                                 │ upstream api (Authorization: Bearer)
                                 ▼
@@ -310,16 +311,16 @@ Keycloak :8081 (OIDC IdP), realm "bank", клиент "bank-web":
 └───────────────────────────────┬──────────────────────────┘
                                 │
                                 ▼
-┌──────────────────────────────────────────────────────────┐
-│jwt_cache (njs shared dict):  есть запись?                │
-│  ├── да (hit)  →  сверить hash(пароль) из Basic          │
-│  │     ├── совпал    →  токен из кэша (token|hash)       │
-│  │     └── не совпал →  401 "auth failed"                │
-│  └── нет (miss)  →  внутренний запрос /_kc               │
+┌────────────────────────────────────────────────────────────┐
+│jwt_cache (njs shared dict):  есть запись?                  │
+│  ├── да (hit)  →  сверить hash(пароль) из Basic            │
+│  │     ├── совпал    →  токен из кэша (token|hash)         │
+│  │     └── не совпал →  401 "auth failed"                  │
+│  └── нет (miss)  →  внутренний запрос /_kc                 │
 │        ├── 200  →  пишем "token|hash" (TTL = таймаут зоны) │
-│        │        →  токен из кэша                         │
-│        └── 401  →  401 (неверные учётные данные)         │
-└───────────────────────────────┬──────────────────────────┘
+│        │        →  токен из кэша                           │
+│        └── 401  →  401 (неверные учётные данные)           │
+└───────────────────────────────┬────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────┐
@@ -427,3 +428,14 @@ docker exec angie-proxy cat /etc/angie/conf.d/default.conf
 
 - `README.md` — этот файл: всё о стенде в одном месте (точки доступа, API, схемы, тесты, troubleshooting).
 - `AGENTS.md` — операционные инструкции для агентов/CLI: переменные окружения (JAVA_HOME/GRADLE_USER_HOME), gotchas Windows, порядок сборки Docker, требования ASCII/CRLF для `start_all.cmd`, детали реализации Basic→JWT в njs.
+
+## Материалы / Источники
+
+- [JWT в Nginx с njs: проверка HS256 и RS256 на реверс-прокси](https://fastfox.pro/blog/tutorials/nginx-njs-jwt-rs256-hs256/) — та же схема, что в стенде (`auth_request` + `js_content`), но с проверкой подписи (HS256/RS256, WebCrypto) и кешированием JWKS. Справочник, как усилить наш `docker/angie/js/jwt.js` за пределы демо (у нас подпись не проверяется).
+- [Документация njs](https://nginx.org/en/docs/njs/) — язык, `ngx.shared`, `js_content`/`js_set`.
+- [ngx_http_auth_request_module](https://nginx.org/en/docs/http/ngx_http_auth_request_module.html) — `auth_request`/`auth_request_set` (у нас `location /api/ → auth_request /_jwt` в `default.conf`).
+- [Angie — официальный сайт](https://angie.software/en/) — конфиг, модули, `angie_status`, `/status/`.
+- [Keycloak: Securing Applications и Authorization Services](https://www.keycloak.org/docs/latest/) — password grant (`directAccessGrantsEnabled`) и Authorization Code + PKCE (`standardFlowEnabled`), что используем в `/_kc` и `/ui-keycloak/`.
+- [RFC 7519 (JSON Web Token)](https://www.rfc-editor.org/rfc/rfc7519) — структура токена, клеймы `exp`, `sub`, `aud`, используемые в `jwt.js` и JWT-интерцепторе.
+- [OIDC Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html) — `/.well-known/openid-configuration`, на который опирается healthcheck Keycloak.
+- [Spring Boot: slice-тесты (@WebMvcTest)](https://docs.spring.io/spring-boot/reference/testing/spring-boot-applications.html#testing.spring-boot-applications.autoconfigured-tests) — как устроены `BankControllerTest`/`ClientServiceImplTest`.

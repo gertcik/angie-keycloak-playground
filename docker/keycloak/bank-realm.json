@@ -1,6 +1,7 @@
 {
   "realm": "bank",
   "displayName": "Bank Demo",
+  "loginTheme": "bank",
   "enabled": true,
   "registrationAllowed": false,
   "loginWithEmailAllowed": false,
