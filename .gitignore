@@ -1,7 +1,7 @@
 *.cmd
 *.png
 task.txt
-gradle-8.5/
+gradle-8.7/
 
 # Gradle
 build/

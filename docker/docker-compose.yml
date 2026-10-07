@@ -32,7 +32,6 @@ services:
       - ./angie/angie.conf:/etc/angie/angie.conf:ro
       - ./angie/conf.d:/etc/angie/conf.d:ro
       - ./angie/js:/etc/angie/js:ro
-      - ./angie/html/console.html:/usr/share/angie/html/console.html:ro
       - ./links.html:/usr/share/angie/html/index.html:ro
       - ./ui-keycloak:/usr/share/angie/html/ui-keycloak:ro
       - ./ui-basic:/usr/share/angie/html/ui-basic:ro

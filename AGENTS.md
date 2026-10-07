@@ -4,8 +4,8 @@ Educational Spring Boot API load-balanced by a single Angie proxy (all other bal
 
 ## Build & Test
 
-- Java 21 + Gradle 8.5 (wrapper included). `jdk-21.0.2/` is **gitignored and often absent** — `java` is not on PATH in a fresh clone. Install any JDK 21 first (or set `JAVA_HOME` to a local copy).
-- Required persistence environment vars (already set as User vars on this machine): `JAVA_HOME=c:\sdk\jdk-21.0.2` and **`GRADLE_USER_HOME=D:\gradle-home`**. The latter is mandatory: the Windows profile is Cyrillic (`Владимир`), so Gradle's test-worker `@argfile` (UTF-8) gets read by the `java` launcher as Cp1251 → `ClassNotFoundException`; pointing Gradle at an ASCII path fixes it. The `18EE~1` short path does NOT help (`getCanonicalPath()` resolves it back).
+- Java 21 + Gradle 8.7 (wrapper included). `jdk-21.0.2/` is **gitignored and often absent** — `java` is not on PATH in a fresh clone. Install any JDK 21 first (or set `JAVA_HOME` to a local copy).
+- Required persistence environment vars (already set as User vars on this machine): `JAVA_HOME=c:\sdk\jdk-21.0.2` and **`GRADLE_USER_HOME=C:\sdk\gradle-home`**. The latter is mandatory: the Windows profile is Cyrillic (`Владимир`), so Gradle's test-worker `@argfile` (UTF-8) gets read by the `java` launcher as Cp1251 → `ClassNotFoundException`; pointing Gradle at an ASCII path fixes it. The `18EE~1` short path does NOT help (`getCanonicalPath()` resolves it back). It lives on the system drive (next to the JDK, `C:\sdk\`) — not on `D:\`.
 - Tests hang with the Gradle daemon on this machine — always pass `--no-daemon`. All Gradle commands run from `app/` (project moved out of the repo root):
 
 ```powershell
@@ -58,7 +58,7 @@ docker compose logs -f bank-app
 | Container | Port | Purpose |
 |-----------|------|---------|
 | bank-app | 8080 (внутр.) | Spring Boot app — `/api/**` требует авторизацию (`Bearer` напрямую либо `Basic` → JWT через njs в Angie), подпись JWT не проверяется. **Порт наружу не публикуется: доступ к API только через Angie `:82`**; все обращения к `/api/**` логируются в логе `bank-app` |
-| angie-proxy | 82 | balancer + `/angie_status`, `/status/` (JSON), `console.html`, Web UI `/ui-keycloak/` (PKCE), `/ui-basic/` (Basic), links page `/` |
+| angie-proxy | 82 | balancer + `/angie_status`, `/status/` (JSON), Web UI `/ui-keycloak/` (PKCE), `/ui-basic/` (Basic), links page `/` |
 | keycloak | 8081 | OIDC IdP, realm `bank`, клиент `bank-web` (PKCE + password grant, `start-dev --import-realm`) |
 
 JWT: UI и тесты получают access token из Keycloak (демо `ivanov`/`password123` → claim `client_id=1`, `petrova`/`password456` → `2`; **тесты — `testuser`/`testpass123` → `client_id=1`**); API берёт из Bearer `preferred_username`/`sub` и `client_id` (демо — без проверки подписи). В лог `bank-app` на каждый `/api/**` выводится и сам JWT (`token=...`). Бывший `POST /api/auth` удалён.

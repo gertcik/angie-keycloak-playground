@@ -14,7 +14,6 @@
 | Admin Keycloak | `http://localhost:8081` | консоль админа: `admin`/`admin`; realm `bank`, клиент `bank-web` |
 | Статус Angie | `http://localhost:82/angie_status` | stub_status (сессии/статистика) |
 | — | `http://localhost:82/status/` | JSON API (server_zones, upstreams, connections) |
-| — | `http://localhost:82/console.html` | Console Light UI |
 | bank-app health | `http://localhost:82/actuator/health` | health-check backend через балансировщик |
 | OIDC discovery | `http://localhost:8081/realms/bank/.well-known/openid-configuration` | де-факто healthcheck Keycloak (ждёт `start_all.cmd` перед smoke) |
 
@@ -27,7 +26,7 @@
 | Windows | 10/11 | запуск `start_all.cmd`, `.bat`-сборка, smoke через `curl.exe` | иная ОС не тестировалась |
 | JDK | 21 (Temurin 21.0.x) | сборка и тесты Spring Boot-приложения | нужен только на хосте сборки; переменная `JAVA_HOME` (по умолчанию `c:\sdk\jdk-21.0.2`): `java -version` |
 | Docker Desktop | актуальная с Compose v2 | весь стенд: `bank-app`, `angie-proxy`, `keycloak`, `k6-load-test` | `docker compose` — из каталога `docker/` |
-| Gradle | 8.5 (обёртка, отдельно не ставится) | сборка JAR, тесты, Allure-отчёты | файл `app/gradlew.bat`; переменная `GRADLE_USER_HOME` должна указывать на ASCII-путь (кириллический профиль ломает Gradle; на этой машине — `D:\gradle-home`, подробности в `AGENTS.md`) |
+| Gradle | 8.7 (обёртка, отдельно не ставится) | сборка JAR, тесты, Allure-отчёты | файл `app/gradlew.bat`; переменная `GRADLE_USER_HOME` должна указывать на ASCII-путь (кириллический профиль ломает Gradle; на этой машине — `C:\sdk\gradle-home`, подробности в `AGENTS.md`) |
 | curl.exe | встроен в Windows 10+ | smoke-тесты в `start_all.cmd` | отдельная установка не нужна |
 | Порты `82`, `8081` | свободные | Angie и Keycloak соответственно | занятость проверить до первого запуска |
 
@@ -58,7 +57,7 @@ docker compose up -d --build
 | Container | Port | Purpose |
 |-----------|------|---------|
 | bank-app | 8080 (внутр.) | Spring Boot API — `/api/**` требует авторизацию, подпись JWT не проверяется. **Порт наружу не публикуется: доступ к API только через Angie `:82`** |
-| angie-proxy | 82 | балансировщик + Web UI + статусы (`/angie_status`, `/status/`, `console.html`) + links page `/` |
+| angie-proxy | 82 | балансировщик + Web UI + статусы (`/angie_status`, `/status/`) + links page `/` |
 | keycloak | 8081 | OIDC IdP, realm `bank`, клиент `bank-web` (PKCE + password grant, `start-dev --import-realm`, без volume — realm пересоздаётся при рестарте) |
 | k6-load-test | — | нагрузочный тест (профиль `test`) |
 
@@ -152,7 +151,7 @@ curl http://localhost:82/api/account/1 -u petrova:WRONG   # -> 401 (неверн
 | Spring Boot (bank-app) | **3.2.0** | `app/build.gradle` |
 | Java (runtime bank-app) | **OpenJDK 21.0.12.1 (Temurin)** | образ bank-app; `docker exec bank-app java -version` |
 | Java (сборка) | **JDK 21** | `app/build.gradle` (source/target 21); локально `JAVA_HOME=c:\sdk\jdk-21.0.2` |
-| Gradle | **8.5** (wrapper) | `app/gradle/wrapper/gradle-wrapper.properties` |
+| Gradle | **8.7** (wrapper) | `app/gradle/wrapper/gradle-wrapper.properties` |
 | H2 | **2.2.224** | `app/build.gradle` |
 | springdoc-openapi | **2.3.0** | `app/build.gradle` |
 | Allure (плагин / CLI) | **2.11.2** / **2.34.0** | `app/build.gradle` |
@@ -246,7 +245,6 @@ curl.exe -s http://localhost:82/_jwt_stats
 ```
 http://localhost:82/angie_status   # stub_status
 http://localhost:82/status/        # JSON API (server_zones, upstreams, connections)
-http://localhost:82/console.html   # Console Light
 ```
 
 ## Схемы стенда (текстовые)
@@ -270,7 +268,7 @@ http://localhost:82/console.html   # Console Light
 │jwt_cache: njs shared dict (token|hash, zone TTL 270s)      │
 │/_kc  →  password grant в Keycloak (только промах)        │
 │статика: /ui-keycloak/, /ui-basic/, /, /swagger-ui        │
-│статусы: /angie_status, /status/ (JSON), console.html     │
+│статусы: /angie_status, /status/ (JSON)                    │
 └───────────────────────────────┬──────────────────────────┘
                                 │ upstream api (Authorization: Bearer)
                                 ▼
@@ -377,7 +375,7 @@ docker compose --profile test run --rm --build k6-load-test
 ├── app/                   # Spring Boot приложение + сборка Gradle
 │   ├── build.gradle       # сборка + тесты + Allure (allureReport, allureStandalone)
 │   ├── settings.gradle    # rootProject.name = 'bank-api'
-│   ├── gradlew(.bat)      # gradle wrapper (Gradle 8.5, всегда --no-daemon)
+│   ├── gradlew(.bat)      # gradle wrapper (Gradle 8.7, всегда --no-daemon)
 │   ├── src/main/java/com/bank/   # controller, service, config
 │   ├── src/test/java/com/bank/   # unit-тесты + e2e (AuthFlowsE2ETest)
 │   └── build/             # JAR + отчёты (gitignored; удаляются командой clean)
