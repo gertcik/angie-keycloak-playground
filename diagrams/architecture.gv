@@ -1,0 +1,77 @@
+digraph arch {
+    // Схема 1: компоненты стенда — Bank API (Angie + Keycloak + Spring Boot)
+    rankdir = LR;
+    bgcolor = "#ffffff";
+    labelloc = "t";
+    fontname = "Arial";
+    fontsize = 20;
+    label = "Стенд Bank API: Angie + Keycloak + Spring Boot";
+
+    node [ fontname = "Arial", fontsize = 12 ];
+    edge [ fontname = "Arial", fontsize = 10 ];
+
+    // ---- Кластер «Браузер/клиент» ----
+    subgraph cluster_client {
+        label = "Клиент (браузер / curl)";
+        fontname = "Arial";
+        style = "rounded";
+        color = "#999999";
+        Browser [ label = "Browser\n/ui-keycloak/  (PKCE S256)\n/ui-basic/  (Basic login)\n/  (links page)", shape = "box3d" ];
+    }
+
+    // ---- Кластер «Angie :82» ----
+    subgraph cluster_angie {
+        label = "Angie :82  (единственный балансировщик)";
+        fontname = "Arial";
+        style = "rounded";
+        color = "#2d7d46";
+
+        angie_core [ label = "angie\nnjs  (ngx_http_js_module)\nworker_processes auto (20)", shape = "box", style = "filled", fillcolor = "#e8f5ee" ];
+
+        subgraph cluster_angie_api {
+            label = "location /api/";
+            fontname = "Arial";
+            color = "#2d7d46";
+            njs_handle [ label = "auth_request /_jwt\njwt.handle()  (200/401)", shape = "box" ];
+            njs_lookup [ label = "proxy_set_header\nAuthorization $auth_token\njwt.lookup()  (js_set)", shape = "box" ];
+            jwt_cache [ label = "jwt_cache: njs shared dict\n(token|hash, zone TTL 270s)", shape = "ellipse", style = "filled", fillcolor = "#fff3cd" ];
+            kc_sub [ label = "location = /_kc  (internal)\npassword grant в Keycloak", shape = "box", style = "dashed" ];
+        }
+
+        angie_static [ label = "статика:\n/ui-keycloak/, /ui-basic/,\n/, /swagger-ui\n/angie_status, /status/", shape = "box", style = "rounded" ];
+    }
+
+    // ---- Кластер «bank-app :8080» ----
+    subgraph cluster_app {
+        label = "bank-app :8080  (внутренний)";
+        fontname = "Arial";
+        style = "rounded";
+        color = "#1f5c33";
+        spring [ label = "Spring Boot (Tomcat)\nH2 in-memory\n/api/me, /api/client/{id},\n/api/account/{id}, /api/client/{id}/accounts", shape = "box", style = "filled", fillcolor = "#e8f5ee" ];
+        note_app [ label = "порт наружу НЕ публикуется:\nдоступ к API только через Angie :82", shape = "note", style = "dotted" ];
+    }
+
+    // ---- Кластер «Keycloak :8081» ----
+    subgraph cluster_kc {
+        label = "Keycloak :8081  (OIDC IdP)";
+        fontname = "Arial";
+        style = "rounded";
+        color = "#b45309";
+        kc [ label = "realm \"bank\"\nклиент \"bank-web\"\n(standardFlowEnabled +\ndirectAccessGrantsEnabled)\nloginTheme: \"bank\"", shape = "box", style = "filled", fillcolor = "#fef3c7" ];
+    }
+
+    // ---- Связи ----
+    Browser -> angie_core [ label = "GET /ui-keycloak/  |  /ui-basic/  |  /  (HTTP)" ];
+    Browser -> kc [ label = "PKCE: redirect на auth endpoint\n(страница входа Keycloak)", style = "dashed", color = "#b45309" ];
+    kc -> Browser [ label = "302 + code (S256)", style = "dashed", color = "#b45309" ];
+
+    angie_core -> angie_static [ style = "invis" ];
+    angie_core -> njs_handle [ label = "auth_request", color = "#2d7d46" ];
+    njs_handle -> jwt_cache [ label = "проверка кэша / запись", color = "#2d7d46" ];
+    jwt_cache -> kc_sub [ label = "промах →  /_kc", style = "dotted", color = "#b45309" ];
+    kc_sub -> kc [ label = "POST /realms/bank/.../token\npassword grant", style = "dashed", color = "#b45309" ];
+
+    njs_handle -> njs_lookup [ style = "invis" ];
+    angie_core -> spring [ label = "upstream /api/** (Authorization: Bearer)", color = "#1f5c33" ];
+    spring -> note_app [ style = "dotted", dir = "none", color = "#999999" ];
+}

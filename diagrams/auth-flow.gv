@@ -1,0 +1,61 @@
+digraph auth_flow {
+    // Схема 2: логика авторизации /api/ внутри Angie (njs jwt.js)
+    rankdir = TB;
+    bgcolor = "#ffffff";
+    labelloc = "t";
+    fontname = "Arial";
+    fontsize = 20;
+    label = "Логика авторизации /api/ в Angie (njs jwt.js)";
+
+    node [ fontname = "Arial", fontsize = 11, shape = "box", style = "rounded" ];
+    edge [ fontname = "Arial", fontsize = 10 ];
+
+    client [ label = "Клиент\n/ui-basic/ (Basic) | /ui-keycloak/ (PKCE) | curl", shape = "box3d" ];
+
+    loc_api [ label = "Angie:  location /api/\nauth_request /_jwt  (js_content jwt.handle)", style = "filled", fillcolor = "#e8f5ee" ];
+    handle [ label = "jwt.handle(): есть Bearer?", shape = "diamond" ];
+
+    bearer [ label = "да → токен из клиента\nпробрасываем как есть" ];
+    basic [ label = "нет → Basic base64(login:password)\nразбираем login:password" ];
+
+    cache [ label = "jwt_cache (shared dict): есть запись token|hash?", shape = "diamond" ];
+
+    hit [ label = "да (hit): сверить hash(пароль)" ];
+    miss [ label = "нет (miss): внутренний /_kc\n(password grant в Keycloak)" ];
+    miss_ok [ label = "200 → запись token|hash\n(TTL = таймаут зоны 270s)", color = "#2d7d46" ];
+    miss_bad [ label = "401 → неверные учётные данные", color = "#b91c1c" ];
+
+    lookup [ label = "proxy_set_header Authorization: Bearer $auth_token\njs_set jwt.lookup() — контекст основного запроса:\nдолговечная запись, продление, гашение при exp≤60s", style = "filled", fillcolor = "#e8f5ee" ];
+    upstream [ label = "bank-app (upstream api)\n/api/me, /api/client/{id}, /api/account/{id}, ...", shape = "box3d" ];
+
+    ret_401 [ label = "401 клиенту (без обращения к upstream)",
+              color = "#b91c1c", shape = "Mrecord",
+              label = "401 Unauthorized | <f> клиенту" ];
+
+    client -> loc_api;
+    loc_api -> handle;
+
+    handle -> bearer [ label = "да" ];
+    handle -> basic [ label = "нет" ];
+
+    bearer -> lookup;
+
+    basic -> cache;
+    cache -> hit [ label = "да" ];
+    cache -> miss [ label = "нет/истёк" ];
+
+    hit -> hit_bad [ label = "hash ≠" ];
+    hit -> hit_ok [ label = "hash =", style = "invis" ];
+    hit_bad [ label = "401 \"auth failed\"" , color = "#b91c1c"];
+    hit_ok [ label = "токен из кэша", color = "#2d7d46" ];
+
+    miss -> miss_bad [ label = "401" ];
+    miss -> miss_ok [ label = "200" ];
+
+    hit_ok -> lookup;
+    miss_ok -> lookup;
+    miss_bad -> ret_401;
+    hit_bad -> ret_401;
+
+    lookup -> upstream [ label = "Bearer $auth_token" ];
+}

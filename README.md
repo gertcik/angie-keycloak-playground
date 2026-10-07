@@ -248,7 +248,25 @@ http://localhost:82/angie_status   # stub_status
 http://localhost:82/status/        # JSON API (server_zones, upstreams, connections)
 ```
 
-## Схемы стенда (текстовые)
+## Схемы стенда
+
+### Графические схемы (Graphviz, `diagrams/`)
+
+> Исходники `.gv` + отрендеренные `.png` лежат в `diagrams/`. Перегенерировать PNG: `dot -Tpng -o diagrams/<name>.png diagrams/<name>.gv`.
+
+### А. Компоненты стенда
+
+![Компоненты стенда](diagrams/architecture.png)
+
+### Б. Логика авторизации /api/ в Angie (njs)
+
+![Логика авторизации в Angie](diagrams/auth-flow.png)
+
+### В. Два пути к /api/**: PKCE (Bearer) и Basic → JWT
+
+![Два пути к /api/**](diagrams/token-flows.png)
+
+### Текстовые схемы (ASCII)
 
 ### 1. Компоненты стенда
 

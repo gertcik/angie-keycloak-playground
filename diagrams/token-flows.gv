@@ -1,0 +1,55 @@
+digraph token_flows {
+    // Схема 3: два способа попасть в /api/** — PKCE (ui-keycloak) и Basic→JWT (ui-basic/njs)
+    rankdir = LR;
+    bgcolor = "#ffffff";
+    labelloc = "t";
+    fontname = "Arial";
+    fontsize = 20;
+    label = "Два пути к /api/**: PKCE (Bearer) и Basic → JWT (Angie/njs)";
+
+    node [ fontname = "Arial", fontsize = 11, shape = "box", style = "rounded" ];
+    edge [ fontname = "Arial", fontsize = 10 ];
+
+    // ---- путь 1: PKCE ----
+    subgraph cluster_pkce {
+        label = "Поток PKCE S256  (/ui-keycloak/)";
+        fontname = "Arial";
+        color = "#1d4ed8";
+        style = "rounded";
+
+        b1 [ label = "Browser", shape = "box3d" ];
+        kc [ label = "Keycloak :8081\nrealm \"bank\", client \"bank-web\"", color = "#b45309", fillcolor = "#fef3c7", style = "filled,rounded" ];
+        a1 [ label = "Angie :82\n/ui-keycloak/ (статик)", color = "#2d7d46" ];
+        app1 [ label = "bank-app :8080\n/api/** (Bearer)", color = "#1f5c33", fillcolor = "#e8f5ee", style = "filled,rounded" ];
+
+        b1 -> kc [ label = "GET auth endpoint+code_challenge(S256)\n→ страница входа → ввод credentials" ];
+        kc -> b1 [ label = "302 + code" ];
+
+        // явный порядок по рангам
+        { rank = same; b1 -> a1 [ style = "invis" ]; }
+
+        b1 -> a1 [ label = "POST token endpoint,\nexchange code (в браузере)" ];
+        a1 -> app1 [ label = "GET /api/**\nAuthorization: Bearer <JWT>\n(njs пропускает Bearer как есть)" ];
+    }
+
+    // ---- путь 2: Basic -> JWT ----
+    subgraph cluster_basic {
+        label = "Поток Basic → JWT  (/ui-basic/ и curl)";
+        fontname = "Arial";
+        color = "#2d7d46";
+        style = "rounded";
+
+        b2 [ label = "Browser / curl", shape = "box3d" ];
+        a2 [ label = "Angie :82\n/api/ → auth_request /_jwt\njwt_cache (shared dict)", color = "#2d7d46", fillcolor = "#e8f5ee", style = "filled,rounded" ];
+        kc2 [ label = "Keycloak :8081\n(password grant)", color = "#b45309", fillcolor = "#fef3c7", style = "filled,rounded" ];
+        app2 [ label = "bank-app :8080\n/api/** (Bearer после подмены)", color = "#1f5c33", fillcolor = "#e8f5ee", style = "filled,rounded" ];
+
+        b2 -> a2 [ label = "GET /api/me\nAuthorization: Basic base64(login:pass)" ];
+        a2 -> kc2 [ label = "промах кэша → _kc: password grant" ];
+        kc2 -> a2 [ label = "access_token → jwt_cache" ];
+        a2 -> app2 [ label = "GET /api/me\nAuthorization: Bearer <JWT from cache>\njwt.lookup() $auth_token" ];
+    }
+
+    // общая привязка — клиенты один и тот же upstream
+    app1 -> app2 [ style = "invis" ];
+}
