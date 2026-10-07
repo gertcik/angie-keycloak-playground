@@ -248,198 +248,24 @@ http://localhost:82/angie_status   # stub_status
 http://localhost:82/status/        # JSON API (server_zones, upstreams, connections)
 ```
 
-## Схемы стенда
 
-### Графические схемы (Graphviz, `diagrams/`)
+## Схемы стенда
 
 > Исходники `.gv` + отрендеренные `.png` лежат в `diagrams/`. Перегенерировать PNG: `dot -Tpng -o diagrams/<name>.png diagrams/<name>.gv`.
 
-### А. Компоненты стенда
+### 1. Компоненты стенда
 
 ![Компоненты стенда](diagrams/architecture.png)
 
-### Б. Логика авторизации /api/ в Angie (njs)
+### 2. Логика авторизации /api/ внутри Angie (njs jwt.js)
 
 ![Логика авторизации в Angie](diagrams/auth-flow.png)
 
-### В. Два пути к /api/**: PKCE (Bearer) и Basic → JWT
+### 3. Два пути к /api/**: PKCE (Bearer) и Basic → JWT
 
 ![Два пути к /api/**](diagrams/token-flows.png)
 
-### Текстовые схемы (ASCII)
 
-### 1. Компоненты стенда
-
-```text
-┌──────────────────────────────────────────────────────────┐
-│                         Browser                          │
-│/ui-keycloak/ (PKCE S256)   →  Bearer JWT                 │
-│/ui-basic/ (Basic login)    →  JWT через Angie            │
-│curl:   Bearer <token>  |  Basic login:password           │
-└───────────────────────────────┬──────────────────────────┘
-                                │ HTTP
-                                ▼
-┌──────────────────────────────────────────────────────────┐
-│                        Angie :82                         │
-│balancer + njs (ngx_http_js_module)                       │
-│API /api/** → ТОЛЬКО здесь (порт 8080 закрыт)             │
-│location /api/  →  auth_request /_jwt (js jwt.handle)     │
-│jwt_cache: njs shared dict (token|hash, zone TTL 270s)    │
-│/_kc  →  password grant в Keycloak (только промах)        │
-│статика: /ui-keycloak/, /ui-basic/, /, /swagger-ui        │
-│статусы: /angie_status, /status/ (JSON)                   │
-└───────────────────────────────┬──────────────────────────┘
-                                │ upstream api (Authorization: Bearer)
-                                ▼
-┌──────────────────────────────────────────────────────────┐
-│                bank-app :8080 (internal)                 │
-│Spring Boot (Tomcat), H2 in-memory                        │
-│порт НЕ публикуется на хост (только Angie :82)            │
-│/api/me, /api/client/{id}, /api/account/{id}, ...         │
-│читает JWT: username, clientId (подпись не проверяется)   │
-└──────────────────────────────────────────────────────────┘
-
-Keycloak :8081 (OIDC IdP), realm "bank", клиент "bank-web":
-/ui-keycloak/ и curl — PKCE / password grant → JWT (Bearer) напрямую;
-/ui-basic/ — Basic → Angie получает JWT через /_kc и кэширует
-в jwt_cache (zone TTL 270 с); неверный пароль → 401.
-Хост обращается к /api/** ТОЛЬКО через Angie :82; 8080 не публикуется.
-```
-
-### 2. Логика авторизации /api/ внутри Angie (njs jwt.js)
-
-```text
-┌──────────────────────────────────────────────────────────┐
-│Клиент: /ui-basic/ (Basic) | /ui-keycloak/ (PKCE) | curl  │
-│Authorization:  Basic base64(login:pass) | Bearer <JWT>   │
-└───────────────────────────────┬──────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────┐
-│Angie:  location /api/  →  auth_request /_jwt (njs)       │
-│njs:  jwt.handle()  |  jwt.lookup()  →  $auth_token       │
-└───────────────────────────────┬──────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────┐
-│jwt.handle():  есть заголовок Bearer?                     │
-│  ├── да  →  токен из заголовка, идём на upstream         │
-│  └── нет (Basic)  →  разбираем login:password            │
-│                     (base64)                             │
-└───────────────────────────────┬──────────────────────────┘
-                                │
-                                ▼
-┌────────────────────────────────────────────────────────────┐
-│jwt_cache (njs shared dict):  есть запись?                  │
-│  ├── да (hit)  →  сверить hash(пароль) из Basic            │
-│  │     ├── совпал    →  токен из кэша (token|hash)         │
-│  │     └── не совпал →  401 "auth failed"                  │
-│  └── нет (miss)  →  внутренний запрос /_kc                 │
-│        ├── 200  →  пишем "token|hash" (TTL = таймаут зоны) │
-│        │        →  токен из кэша                           │
-│        └── 401  →  401 (неверные учётные данные)           │
-└───────────────────────────────┬────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────┐
-│proxy_set_header Authorization: Bearer $auth_token        │
-│($auth_token = jwt.lookup(), синхронно из shared dict)    │
-└───────────────────────────────┬──────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────┐
-│                 bank-app (upstream api):                 │
-│/api/me, /api/client/{id}, /api/account/{id}, ...         │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Тестирование
-
-```bash
-cd app
-.\gradlew.bat test --no-daemon     # unit-тесты (чистые слайсы, без Docker)
-.\gradlew.bat e2eTest --no-daemon  # e2e против живого стенда (см. ниже)
-.\gradlew.bat allureReport --no-daemon     # web-отчёт в app/build/reports/allure-report/allureReport
-.\gradlew.bat allureStandalone --no-daemon # standalone index.html (app/build/reports/allure-report-standalone) — открывается с диска
-.\gradlew.bat allureServe           # открыть отчёт локально (блокирует терминал)
-```
-
-E2E (`app/src/test/java/com/bank/e2e/AuthFlowsE2ETest.java`, тэг `@Tag("e2e")`, Java `HttpClient`, Allure) проверяют оба варианта подключения к `/api/**` через живой стенд:
-
-1. `Authorization: Bearer <JWT>` — токен из Keycloak password grant;
-2. `Authorization: Basic login:password` — JWT получает и кэширует Angie/njs (`jwt_cache`);
-
-плюс негативы: неверный пароль → 401, без заголовка → 401.
-
-Нужен поднятый Docker-стенд (Angie :82 + Keycloak :8081); если недоступен — тесты пропускаются (Assumption). Исключены из обычного `test` (excludeTags), поэтому `gradlew test` работает без Docker. Точки подключения переопределяются: `-De2e.angie.base=http://localhost:82 -De2e.keycloak.url=http://localhost:8081`.
-
-### Нагрузочный тест (k6)
-
-```bash
-cd docker
-docker compose --profile test run --rm --build k6-load-test
-```
-
-`BASE_URL` по умолчанию — `http://angie-proxy:82` (compose), переопределяется переменной окружения (не флагом k6 — он даст ошибку `unknown flag`). Скрипт копируется в образ, поэтому после правок нужен `--build`. Токен k6 получает в `setup()` из Keycloak по password grant с ретраями на случай, пока Keycloak ещё поднимается (healthcheck у него нет). `load-test.js` ходит по аккаунтам 1–3 (`/api/account/4` — 404 by design).
-
-Метрики: `http_req_duration` (p95 < 500ms), `http_req_failed` (rate < 0.01), `me_success/failure`, `client_success/failure`, `account_success/failure`, `client_accounts_success/failure`, `me_duration`, `client_duration`, `account_duration`, `client_accounts_duration`.
-
-## Структура проекта
-
-```
-.
-├── README.md              # эта документация (единая точка входа)
-├── AGENTS.md              # операционные инструкции для агентов/CLI (env, gotchas, порядок сборки)
-├── start_all.cmd          # запуск одним скриптом (assemble → compose → smoke → e2e → Allure; test / clean)
-├── app/                   # Spring Boot приложение + сборка Gradle
-│   ├── build.gradle       # сборка + тесты + Allure (allureReport, allureStandalone)
-│   ├── settings.gradle    # rootProject.name = 'bank-api'
-│   ├── gradlew(.bat)      # gradle wrapper (Gradle 8.7, всегда --no-daemon)
-│   ├── src/main/java/com/bank/   # controller, service, config
-│   ├── src/test/java/com/bank/   # unit-тесты + e2e (AuthFlowsE2ETest)
-│   └── build/             # JAR + отчёты (gitignored; удаляются командой clean)
-└── docker/                # стенд: docker-compose.yml, links.html, app/, angie/, keycloak/, ui-keycloak/, ui-basic/, k6/
-```
-
-## Docker-команды
-
-```bash
-cd docker
-docker compose up -d --build     # запуск (перед этим соберите JAR в app/)
-docker compose down              # остановка
-docker compose ps                # статус
-docker compose logs -f bank-app  # логи приложения
-docker compose logs -f angie-proxy
-docker exec -it bank-app sh      # shell в контейнере
-docker exec -it angie-proxy sh
-docker compose up -d --force-recreate keycloak   # пересоздать Keycloak после правки realm
-```
-
-`docker/app/Dockerfile` (build context = корень репозитория) копирует готовый `app/build/libs/bank-api-1.0.0.jar` — без build-стадии, поэтому **сначала `gradlew assemble`, потом `docker compose up --build`**. При пересборке образа `bank-api` контейнер Angie пересоздаётся (краткий даунтайм); healthcheck-гейтинг ждёт healthy, поэтому k6 стартует только после готовности.
-
-## Troubleshooting
-
-### 401 Unauthorized
-
-`/api/**` требуют авторизацию: `Bearer <token>` либо `Basic login:password`.
-
-- **Bearer**: токен считается действительным до истечения (`accessTokenLifespan=300` с). После истечения UI обновляет его через refresh token; у прямых curl — получите новый.
-- **Basic**: 401 означает неверные логин/пароль в Keycloak. Кэш в Angie выдаёт токен только до `exp` − 30 с, затем выполняется повторный password grant.
-
-### Keycloak realm не импортировался
-
-```powershell
-docker compose logs keycloak
-docker exec keycloak sh -c "cat /opt/keycloak/data/import/bank-realm.json"
-```
-
-Если realm `bank` не появился — проверьте лог на ошибки; после правки пересоздайте контейнер: `docker compose up -d --force-recreate keycloak`.
-
-### Angie не запускается
-
-```powershell
-docker logs angie-proxy
-docker exec angie-proxy cat /etc/angie/conf.d/default.conf
 ```
 
 ## Документация
