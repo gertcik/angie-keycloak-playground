@@ -15,6 +15,7 @@
 | Admin Keycloak | `http://localhost:8081` | консоль админа: `admin`/`admin`; realm `bank`, клиент `bank-web` |
 | Статус Angie | `http://localhost:82/angie_status` | stub_status (сессии/статистика) |
 | — | `http://localhost:82/status/` | JSON API (server_zones, upstreams, connections) |
+| Angie Console Light | `http://localhost:82/console/` | визуальный мониторинг Angie (UI + `/console/api/` → `/status/`), статика вшита в образ Angie |
 | bank-app health | `http://localhost:82/actuator/health` | health-check backend через балансировщик |
 | OIDC discovery | `http://localhost:8081/realms/bank/.well-known/openid-configuration` | де-факто healthcheck Keycloak (ждёт `start_all.cmd` перед smoke) |
 
@@ -58,7 +59,7 @@ docker compose up -d --build
 | Container | Port | Purpose |
 |-----------|------|---------|
 | bank-app | 8080 (внутр.) | Spring Boot API — `/api/**` требует авторизацию, подпись JWT не проверяется. **Порт наружу не публикуется: доступ к API только через Angie `:82`** |
-| angie-proxy | 82 | балансировщик + Web UI + статусы (`/angie_status`, `/status/`) + links page `/` |
+| angie-proxy | 82 | балансировщик + Web UI + статусы (`/angie_status`, `/status/`) + **Console Light (`/console/`)** + links page `/` |
 | keycloak | 8081 | OIDC IdP, realm `bank`, клиент `bank-web` (PKCE + password grant, `start-dev --import-realm`, без volume — realm пересоздаётся при рестарте); кастомная login-тема `bank` (`docker/keycloak/themes/bank/`) |
 | k6-load-test | — | нагрузочный тест (профиль `test`) |
 
@@ -70,6 +71,8 @@ docker compose up -d --build
 | GET | `/api/client/{id}` | данные клиента |
 | GET | `/api/account/{id}` | счёт по ID |
 | GET | `/api/client/{id}/accounts` | счета клиента |
+| GET | `/api/cookies` | эхо полученных апстримом cookies (диагностика прохождения `Cookie` через Angie) |
+| GET | `/api/session` | стейтфул-эндпоинт: создаёт `HttpSession` + счётчик обращений (диагностика `JSESSIONID`) |
 
 JWT: UI и k6 получают access token из Keycloak; API берёт из Bearer `preferred_username`/`sub` и `client_id` (демо — подпись JWT не проверяется). Без `Authorization` — `401`.
 
@@ -129,13 +132,15 @@ curl http://localhost:82/api/account/1 -u petrova:WRONG   # -> 401 (неверн
 
 | Файл | Где | Что делает |
 |------|-----|------------|
-| `docker/angie/Dockerfile` | исходный | Базовый образ `docker.angie.software/angie:latest` (Angie с полным набором модулей — njs уже внутри), `EXPOSE 82`, `CMD angie -g "daemon off;"`. Отдельной установки njs нет. |
+| `docker/angie/Dockerfile` | исходный | Базовый образ `docker.angie.software/angie:latest` (Angie с полным набором модулей — njs уже внутри), `EXPOSE 82`, `CMD angie -g "daemon off;"`. Многостадийная сборка: стадия `console-light` (alpine) скачивает тарбол Console Light и копирует его статику в `/usr/share/angie-console-light/html`. Отдельной установки njs нет. |
 | `docker/angie/angie.conf` | монтируется в `/etc/angie/angie.conf:ro` | Глобальный конфиг: `load_module .../ngx_http_js_module.so` (динамический модуль njs), `js_import jwt from /etc/angie/js/jwt.js` (импорт скрипта → `jwt.handle`/`jwt.lookup`), `js_shared_dict_zone zone=jwt_cache:1m timeout=270s` (shared-словарь: 1 МБ, TTL записи = 270 с ≈ `exp` токена − 30 с), `js_set $auth_token jwt.lookup` (njs-переменная для заголовка), `include /etc/angie/conf.d/*.conf`. |
-| `docker/angie/conf.d/default.conf` | монтируется в `/etc/angie/conf.d:ro` | Vhost `:82`. Ключевое для JWT: `location /api/` (`auth_request /_jwt` + `proxy_pass http://bank-app:8080` + `proxy_set_header Authorization $auth_token`), `location = /_jwt` (`internal; js_content jwt.handle;`), `location = /_kc` (`internal; proxy_pass http://keycloak:8080/realms/bank/protocol/openid-connect/token; proxy_set_header Content-Type application/x-www-form-urlencoded;`). Отладка: `location = /_jwt_stats` (`js_content jwt.stats` — сколько токенов в кэше). Остальное — статика `/`, `/ui-keycloak/`, `/ui-basic/`, swagger, `/angie_status`, `/status/`. |
+| `docker/angie/conf.d/default.conf` | монтируется в `/etc/angie/conf.d:ro` | Vhost `:82`. Ключевое для JWT: `location /api/` (`auth_request /_jwt` + `proxy_pass http://bank-app:8080` + `proxy_set_header Authorization $auth_token`), `location = /_jwt` (`internal; js_content jwt.handle;`), `location = /_kc` (`internal; proxy_pass http://keycloak:8080/realms/bank/protocol/openid-connect/token; proxy_set_header Content-Type application/x-www-form-urlencoded;`). Отладка: `location = /_jwt_stats` (`js_content jwt.stats` — сколько токенов в кэше). Остальное — статика `/`, `/ui-keycloak/`, `/ui-basic/`, swagger, `/angie_status`, `/status/`, `/console/` (+ `/console/api/` → `api /status/`). |
 | `docker/angie/js/jwt.js` | монтируется в `/etc/angie/js:ro` | Логика njs (ES5): `handle(r)` — auth-субреквест (200/401, кэш, сверка hash, password grant), `lookup(r)` — значение `$auth_token` для апстрима (в контексте основного запроса пере-пишет/продлит запись, гасит её при `exp ≤ 60 с`), `stats(r)` — отладка кэша (`jwt_cache.keys()`), `hash(s)` — SHA-256 (`require('crypto')`, fallback FNV-1a 32-bit), `expires(tok)` — считывает `exp` из payload JWT, `enc(s)` — URL-энкодинг login/password, `userFrom(auth)` — login из Basic. |
 | `docker/docker-compose.yml` | оркестрация | Сервис `angie-proxy`: порт `82:82`, монтажи `./angie/angie.conf`, `./angie/conf.d`, `./angie/js`, `./links.html`→`index.html`, `./ui-keycloak`, `./ui-basic`; healthcheck `wget http://127.0.0.1:82/angie_status` (IPv4 — Angie не слушает `::1`); `depends_on: bank-app: service_healthy`. Правки конфигов применяются без пересборки образа (volume-монтаж), но после изменения `angie.conf`/`jwt.js` нужен reload: `docker exec angie-proxy angie -s reload`. |
 
 ### Важные ограничения этого стенда
+
+- Cookies/сессии: цепочка **stateless** — `bank-app` (кроме диагностического `/api/session`) и Angie/njs сессий не создают и не гасят, поэтому `Set-Cookie: JSESSIONID=""` в ответах здесь появиться неоткуда. `Cookie` инициатора проходит насквозь неизменной, `Set-Cookie` апстрима возвращается без искажений; cookie в password-grant `/_kc` сбрасывается. Доказано e2e (`SessionCookieE2ETest`) и руками: `/api/cookies` эхом возвращает `Cookie: JSESSIONID=...`, `/api/session` выдаёт непустой `Set-Cookie: JSESSIONID=...`, повтор с этим cookie — та же сессия (`hits` растёт) и без стирания. «Пустой JSESSIONID» из внешних отчётов — symptom сброса сессии тем Java-сервисом, который получил `Bearer` вместо ожидаемого `Basic` (см. `backlog/jsessionid-lost-basic-jwt.md`).
 
 - `$upstream_http_*` НЕ работает для `js_content` — только для реального апстрима. Поэтому токен к апстриму передаётся через njs-переменную `$auth_token` из shared-словаря, а не через заголовок subrequest.
 - njs в этом образе — ES5: нет `fetch`, `for..of`, `ngx.encodeBase64`; base64-операции — через `Buffer.from(..., 'base64')`.
@@ -171,7 +176,7 @@ curl http://localhost:82/api/account/1 -u petrova:WRONG   # -> 401 (неверн
 3. **Vhost** `docker/angie/conf.d/default.conf`, порт 82:
    - `location /api/` → `auth_request /_jwt;` + `proxy_pass http://bank-app:8080;` + `proxy_set_header Authorization $auth_token;` — каждый `/api/**` сначала проходит внутреннюю авторизацию, затем получает заголовок `Authorization` из njs;
    - `location = /_jwt { internal; js_content jwt.handle; }` — внутренняя точка auth-проверки (наружу недоступна);
-   - `location = /_kc { internal; proxy_pass http://keycloak:8080/realms/bank/protocol/openid-connect/token; proxy_set_header Content-Type application/x-www-form-urlencoded; }` — внутренний прокси Keycloak password grant.
+   - `location = /_kc { internal; proxy_pass http://keycloak:8080/realms/bank/protocol/openid-connect/token; proxy_set_header Cookie ""; proxy_set_header Content-Type application/x-www-form-urlencoded; }` — внутренний прокси Keycloak password grant; `Cookie` гасится (subrequest иначе наследовал бы cookie инициатора, напр. `JSESSIONID`, и отправлял его в IdP).
 4. **Логика njs** `docker/angie/js/jwt.js` (ES5): функции `handle`, `lookup`, `stats` + хелперы `hash`/`expires`/`enc`/`userFrom`, экспорт `export default { handle, lookup, stats }`. Долговечная запись в кэш делается в `lookup()` (контекст основного запроса) — запись из auth-subrequest `handle()` в этой сборке живёт лишь ~0,3 с.
 5. **Keycloak** — клиент `bank-web` в realm `bank` должен иметь `directAccessGrantsEnabled: true` (password grant — им ходит njs в `/_kc`) и `standardFlowEnabled: true` (PKCE для `/ui-keycloak/`). Импорт realm: `docker/keycloak/bank-realm.json`, запуск `start-dev --import-realm`.
 6. **Compose-монтажи** (`docker/docker-compose.yml`, сервис `angie-proxy`): `./angie/angie.conf` → `/etc/angie/angie.conf:ro`, `./angie/conf.d` → `/etc/angie/conf.d:ro`, `./angie/js` → `/etc/angie/js:ro`; healthcheck `wget http://127.0.0.1:82/angie_status` (только IPv4 — Angie не слушает `::1`); `depends_on: bank-app: condition: service_healthy`.
@@ -246,7 +251,25 @@ curl.exe -s http://localhost:82/_jwt_stats
 ```
 http://localhost:82/angie_status   # stub_status
 http://localhost:82/status/        # JSON API (server_zones, upstreams, connections)
+http://localhost:82/console/       # Angie Console Light — визуальный дашборд поверх /status/
 ```
+
+### Angie Console Light
+
+Бесплатная консоль мониторинга Angie ([console.angie.software](https://console.angie.software/)) — статический
+SPA-фронтенд, который читает тот же `/status/` API. В стенде:
+
+- Статические файлы (`index.html`, `assets/app.bundle.js`, `assets/editor.worker.bundle.js`) скачиваются
+  из официального тарбола и вшиваются в образ Angie (стадия `console-light` в `docker/angie/Dockerfile`,
+  версия задаётся `ARG CONSOLE_VERSION`, по умолчанию `1.9.0`).
+- `docker/angie/conf.d/default.conf`: `location /console/` раздаёт статику, вложенный
+  `location /console/api/ { api /status/; }` проксирует запросы фронтенда в статус-API
+  (фронтенд ходит относительным путём `api/`, поэтому из `/console/` попадает в `/console/api/`).
+- Доступ открыт всем (демо). В проде консоль обычно закрывают: `allow 127.0.0.1; deny all;` —
+  строка-подсказка есть в `default.conf`.
+
+Проверка: `http://localhost:82/console/` → HTTP 200 (smoke в `start_all.cmd`), данные появляются
+после первых запросов к `/api/**` (upstream `bank-app`).
 
 
 ## Схемы стенда
@@ -279,6 +302,7 @@ http://localhost:82/status/        # JSON API (server_zones, upstreams, connecti
 - [Документация njs](https://nginx.org/en/docs/njs/) — язык, `ngx.shared`, `js_content`/`js_set`.
 - [ngx_http_auth_request_module](https://nginx.org/en/docs/http/ngx_http_auth_request_module.html) — `auth_request`/`auth_request_set` (у нас `location /api/ → auth_request /_jwt` в `default.conf`).
 - [Angie — официальный сайт](https://angie.software/en/) — конфиг, модули, `angie_status`, `/status/`.
+- [Angie Console Light](https://angie.software/en/console/) ([демо](https://console.angie.software/), [GitHub](https://github.com/webserver-llc/angie-console-light)) — визуальный мониторинг поверх `/status/`; в стенде доступен на `/console/`.
 - [Keycloak: Securing Applications и Authorization Services](https://www.keycloak.org/docs/latest/) — password grant (`directAccessGrantsEnabled`) и Authorization Code + PKCE (`standardFlowEnabled`), что используем в `/_kc` и `/ui-keycloak/`.
 - [RFC 7519 (JSON Web Token)](https://www.rfc-editor.org/rfc/rfc7519) — структура токена, клеймы `exp`, `sub`, `aud`, используемые в `jwt.js` и JWT-интерцепторе.
 - [OIDC Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html) — `/.well-known/openid-configuration`, на который опирается healthcheck Keycloak.

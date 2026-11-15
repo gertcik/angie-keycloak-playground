@@ -51,6 +51,7 @@ echo.
 echo  Web endpoints:
 curl.exe -s -o NUL -w "  angie_status      http://localhost:82/angie_status        -> HTTP %%{http_code}\n" http://localhost:82/angie_status
 curl.exe -s -o NUL -w "  status JSON       http://localhost:82/status/             -> HTTP %%{http_code}\n" http://localhost:82/status/
+curl.exe -s -o NUL -w "  console light     http://localhost:82/console/            -> HTTP %%{http_code}\n" http://localhost:82/console/
 curl.exe -s -o NUL -w "  links page        http://localhost:82/                    -> HTTP %%{http_code}\n" http://localhost:82/
 curl.exe -s -o NUL -w "  swagger ui        http://localhost:82/swagger-ui.html     -> HTTP %%{http_code}\n" -L http://localhost:82/swagger-ui.html
 curl.exe -s -o NUL -w "  bank-actuator   http://localhost:82/actuator/health     -> HTTP %%{http_code}\n" http://localhost:82/actuator/health
